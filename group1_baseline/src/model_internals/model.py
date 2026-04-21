@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LLaMA3 model internals used by Group 1 baseline.
-
-Most of this file is framework-level model code (Tunix/Flax style) used as
-the base decoder implementation.
-
-Project-specific note:
-- `forward_from_embeddings(...)` is used by Group 1 to train with projected
-  CLIP embeddings as direct input embeddings during stage-1 alignment.
-"""
+"""LLama3 model."""
 
 import dataclasses
 import enum
@@ -219,7 +211,48 @@ class Einsum(nnx.Module):
   @jax.named_scope('einsum')
   def __call__(self, x: jaxtyping.ArrayLike) -> jaxtyping.Array:
     return jnp.einsum(self.einsum_str, x, self.w.value)
+class LoRAEinsum(nnx.Module):
+  """Einsum module with LoRA adapters injected."""
+  def __init__(
+      self,
+      einsum_str: str,
+      shape: flax.typing.Shape,
+      r: int = 8,
+      alpha: float = 16.0,
+      *,
+      rngs: nnx.Rngs,
+      sharding: Tuple[str | None, ...],
+  ):
+    # Initialize the base frozen weights
+    self.base = Einsum(einsum_str=einsum_str, shape=shape, rngs=rngs, sharding=sharding)
+    self.r = r
+    self.alpha = alpha
 
+    # shape is (embed_dim, num_heads, head_dim)
+    in_features = shape[0]
+    out_features = shape[1] * shape[2]
+
+    # Initialize LoRA parameters
+    self.lora_A = nnx.Param(
+        nnx.initializers.normal(stddev=0.02)(rngs.params(), (in_features, self.r)),
+        sharding=None 
+    )
+    self.lora_B = nnx.Param(
+        nnx.initializers.zeros_init()(rngs.params(), (self.r, out_features)),
+        sharding=None
+    )
+
+  @jax.named_scope('lora_einsum')
+  def __call__(self, x: jaxtyping.ArrayLike) -> jaxtyping.Array:
+    base_out = self.base(x)
+    
+    # LoRA forward pass: (x @ A @ B) * (alpha / r)
+    lora_out = jnp.dot(jnp.dot(x, self.lora_A.value), self.lora_B.value) * (self.alpha / self.r)
+    
+    # Reshape lora_out to match base_out's attention head splitting
+    lora_out = lora_out.reshape(base_out.shape)
+    
+    return base_out + lora_out
 
 class Embedder(nnx.Module):
   """Embedder module."""
@@ -311,7 +344,7 @@ class Attention(nnx.Module):
   ):
     self.config = config
     self.shd_config = config.shd_config
-    self.q_proj = Einsum(
+    self.q_proj = LoRAEinsum(#changed type form einsum to loraeinsum
         einsum_str='BTD,DNH->BTNH',
         shape=(config.embed_dim, config.num_heads, config.head_dim),
         rngs=rngs,
@@ -323,7 +356,7 @@ class Attention(nnx.Module):
         rngs=rngs,
         sharding=self.shd_config.kv_weight_dnh,
     )
-    self.v_proj = Einsum(
+    self.v_proj = LoRAEinsum(#changed type form einsum to loraeinsum
         einsum_str='BSD,DKH->BSKH',
         shape=(config.embed_dim, config.num_kv_heads, config.head_dim),
         rngs=rngs,
@@ -590,9 +623,9 @@ class Llama3(BackendMappingMixin, nnx.Module, pytree=False):
         ),
     }
   
-  # Forward pass starting from pre-built embeddings instead of token IDs.
-  # Used in stage-1 alignment where CLIP features are projected into LLaMA
-  # embedding space, then fed directly through decoder layers.
+# Forward pass through the LLaMA model starting from input embeddings. 
+# This is used during stage 1 training where we directly feed the projected CLIP features as embeddings to the LLaMA model and 
+# ompute the loss against the target captions.  
   def forward_from_embeddings(
     self,
     input_embeds,     # [B, L, D]

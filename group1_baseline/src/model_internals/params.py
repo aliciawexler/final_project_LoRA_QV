@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for loading and converting Llama3 pretrained weights.
-
-Context for this project:
-- This mapping bridges Hugging Face/LLaMA safetensor naming to the internal
-  parameter names expected by the local `model.py` implementation.
-- Group 1 uses this during model bootstrap before stage-1/stage-2 training.
-"""
+"""Utils for loading and converting Llama3 PT weights."""
 
 import jax
 import jax.numpy as jnp
@@ -27,13 +21,12 @@ from tunix.models.llama3 import model as model_lib
 
 
 def _get_key_and_transform_mapping(cfg: model_lib.ModelConfig):
-  # Mapping format:
-  #   torch_key_regex -> (target_param_name, (transpose_rule, reshape_rule))
+  # Mapping of torch_keys -> (nnx_keys, (permute_rule, reshape_rule)).
   return {
       r"model\.embed_tokens\.weight": ("embedder.input_embedding", None),
       # attention projection weights
       r"model\.layers\.([0-9]+)\.self_attn\.q_proj\.weight": (
-          r"layers.\1.attn.q_proj.w",
+          r"layers.\1.attn.q_proj.base.w.",#exp1, added base
           ((1, 0), (cfg.embed_dim, cfg.num_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.k_proj\.weight": (
@@ -41,7 +34,7 @@ def _get_key_and_transform_mapping(cfg: model_lib.ModelConfig):
           ((1, 0), (cfg.embed_dim, cfg.num_kv_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.v_proj\.weight": (
-          r"layers.\1.attn.v_proj.w",
+          r"layers.\1.attn.v_proj.base.w",#exp1, added base
           ((1, 0), (cfg.embed_dim, cfg.num_kv_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.o_proj\.weight": (
