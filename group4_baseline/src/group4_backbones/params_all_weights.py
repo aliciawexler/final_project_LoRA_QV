@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utils for loading and converting Llama3 PT weights."""
+"""Utils for loading and converting Llama3 PT weights (Group4 all-weights LoRA variant)."""
+
+import importlib.util
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 from tunix.models import safetensors_loader
-from . import model as model_lib
+
+
+def _load_local_model_module():
+  model_path = Path(__file__).with_name("model_all_weights.py")
+  spec = importlib.util.spec_from_file_location("group4_backbone_model_all_weights", str(model_path))
+  if spec is None or spec.loader is None:
+    raise ImportError(f"Failed to load model module from: {model_path}")
+  mod = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(mod)
+  return mod
+
+
+model_lib = _load_local_model_module()
 
 
 def _get_key_and_transform_mapping(cfg: model_lib.ModelConfig):
@@ -26,11 +41,11 @@ def _get_key_and_transform_mapping(cfg: model_lib.ModelConfig):
       r"model\.embed_tokens\.weight": ("embedder.input_embedding", None),
       # attention projection weights
       r"model\.layers\.([0-9]+)\.self_attn\.q_proj\.weight": (
-          r"layers.\1.attn.q_proj.base.w.",#exp1, added base
+          r"layers.\1.attn.q_proj.base.w",#exp1, added base
           ((1, 0), (cfg.embed_dim, cfg.num_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.k_proj\.weight": (
-          r"layers.\1.attn.k_proj.w",
+          r"layers.\1.attn.k_proj.base.w",
           ((1, 0), (cfg.embed_dim, cfg.num_kv_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.v_proj\.weight": (
@@ -38,20 +53,20 @@ def _get_key_and_transform_mapping(cfg: model_lib.ModelConfig):
           ((1, 0), (cfg.embed_dim, cfg.num_kv_heads, cfg.head_dim)),
       ),
       r"model\.layers\.([0-9]+)\.self_attn\.o_proj\.weight": (
-          r"layers.\1.attn.o_proj.w",
+          r"layers.\1.attn.o_proj.base.w",
           ((1, 0), (cfg.num_heads, cfg.head_dim, cfg.embed_dim)),
       ),
       # mlp
       r"model\.layers\.([0-9]+)\.mlp\.gate_proj\.weight": (
-          r"layers.\1.mlp.gate_proj.kernel",
+          r"layers.\1.mlp.gate_proj.base.kernel",
           ((1, 0), None),
       ),
       r"model\.layers\.([0-9]+)\.mlp\.up_proj\.weight": (
-          r"layers.\1.mlp.up_proj.kernel",
+          r"layers.\1.mlp.up_proj.base.kernel",
           ((1, 0), None),
       ),
       r"model\.layers\.([0-9]+)\.mlp\.down_proj\.weight": (
-          r"layers.\1.mlp.down_proj.kernel",
+          r"layers.\1.mlp.down_proj.base.kernel",
           ((1, 0), None),
       ),
       r"model\.norm\.weight": ("final_norm.w", None),
